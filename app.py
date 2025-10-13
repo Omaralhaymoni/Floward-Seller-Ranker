@@ -1,6 +1,7 @@
-﻿import pandas as pd
+import pandas as pd
 import numpy as np
 import streamlit as st
+from io import BytesIO, StringIO
 
 st.set_page_config(page_title="Best Seller Ranker", layout="wide")
 st.markdown("""
@@ -110,16 +111,17 @@ section[data-testid="stSidebar"] *{ color:var(--text)!important; }
 </style>
 """, unsafe_allow_html=True)
 
-
-
-
+# ---------- HERO ----------
 hero = st.container()
 with hero:
     st.markdown('<div class="hero">', unsafe_allow_html=True)
-    col_logo, col_text = st.columns([1, 6], gap="large")  # adjust ratios as you like
+    col_logo, col_text = st.columns([1, 6], gap="large")
     with col_logo:
-        # exact file name in the same folder as app.py
-        st.image("logo.png", width=84)  # tweak width to fit your taste
+        # Optional: show logo only if present
+        try:
+            st.image("logo.png", width=84)
+        except Exception:
+            pass
     with col_text:
         st.markdown(
             """
@@ -132,8 +134,7 @@ with hero:
         )
     st.markdown('</div>', unsafe_allow_html=True)
 
-
-##############################################################
+# ---------- CONSTANTS ----------
 DIMENSIONS = ["brand_name", "mc0", "mc1", "mc2", "mc3", "mc4"]
 METRIC_MAP = {
     "Sales": "product_sales",
@@ -145,29 +146,114 @@ ALL_COLUMNS = [
     "date", "product_type_description", "brand_name", "mc0", "mc1", "mc2",
     "mc3", "mc4", "margin", "product_price", "product_cost", "product_sales"
 ]
-def load_data(path: str) -> pd.DataFrame:
-    df = pd.read_csv(path)
+
+# ---------- DATA LOADERS ----------
+@st.cache_data(show_spinner=False)
+def load_csv_like(file_or_path) -> pd.DataFrame:
+    """
+    Tries to read a CSV using pandas with automatic delimiter inference.
+    Works with file-like objects and paths.
+    """
+    try:
+        # sep=None with engine="python" lets pandas infer delimiter
+        df = pd.read_csv(file_or_path, sep=None, engine="python")
+        return df
+    except Exception:
+        # Try as standard comma CSV as a fallback
+        try:
+            if isinstance(file_or_path, (BytesIO, StringIO)):
+                file_or_path.seek(0)
+            df = pd.read_csv(file_or_path)
+            return df
+        except Exception as e:
+            raise e
+
+@st.cache_data(show_spinner=False)
+def load_excel(file_or_bytes) -> pd.DataFrame:
+    """
+    Read the first sheet of an Excel file. Accepts upload file or bytes.
+    """
+    return pd.read_excel(file_or_bytes)  # first sheet by default
+
+def normalize_dataframe(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Normalize columns, parse dates & numerics, warn on missing expected cols.
+    """
+    if df is None or df.empty:
+        return pd.DataFrame()
+
     df.columns = [c.strip() for c in df.columns]
-    # keep only expected columns if present
+
+    # soft warning for missing columns (not fatal)
     missing = [c for c in ALL_COLUMNS if c not in df.columns]
     if missing:
         st.warning(f"Missing columns in file: {missing}")
+
     # date → datetime
     if "date" in df.columns:
         df["date"] = pd.to_datetime(df["date"], errors="coerce")
+
     # ensure metrics numeric
     for m in METRIC_MAP.values():
         if m in df.columns:
             df[m] = pd.to_numeric(df[m], errors="coerce")
+
     return df
-DATA_PATH = "sales_data.csv"
-df = load_data(DATA_PATH)
 
+def load_any(uploaded_file) -> pd.DataFrame:
+    """
+    Decide how to load based on the uploaded file extension / MIME.
+    """
+    if uploaded_file is None:
+        return pd.DataFrame()
+
+    name = uploaded_file.name.lower()
+    if name.endswith(".csv") or name.endswith(".txt"):
+        df = load_csv_like(uploaded_file)
+    elif name.endswith(".xlsx") or name.endswith(".xls"):
+        df = load_excel(uploaded_file)
+    else:
+        # Try CSV first, then Excel
+        try:
+            df = load_csv_like(uploaded_file)
+        except Exception:
+            uploaded_file.seek(0)
+            df = load_excel(uploaded_file)
+    return normalize_dataframe(df)
+
+@st.cache_data(show_spinner=False)
+def load_local_fallback(path: str) -> pd.DataFrame:
+    try:
+        df = load_csv_like(path)
+        return normalize_dataframe(df)
+    except Exception:
+        return pd.DataFrame()
+
+# ---------- SIDEBAR: UPLOAD + OPTIONS ----------
+with st.sidebar:
+    st.header("Dataset")
+    uploaded = st.file_uploader(
+        "Upload CSV or Excel",
+        type=["csv", "xlsx", "xls", "txt"],
+        help="Include columns like date, product_type_description, brand_name, mc0–mc4, margin, product_price, product_cost, product_sales (as available)."
+    )
+
+# Load data: prefer upload; otherwise try local fallback; otherwise stop
+df = load_any(uploaded)
 if df.empty:
-    st.error("No data loaded. Check DATA_PATH.")
-    st.stop()
+    # optional fallback to a local sample file if present
+    SAMPLE_PATH = "sales_data.csv"
+    sample_df = load_local_fallback(SAMPLE_PATH)
+    if not sample_df.empty:
+        st.info("No file uploaded — using bundled sample: sales_data.csv")
+        df = sample_df
+    else:
+        st.error("No data loaded. Please upload a CSV/Excel with your sales data.")
+        st.stop()
 
+# ---------- MAIN UI ----------
 st.title("Best Seller Ranker")
+
 with st.sidebar:
     st.header("Filters")
 
@@ -186,8 +272,9 @@ with st.sidebar:
     else:
         mask_date = np.ones(len(df), dtype=bool)
 
-    # Optional: product_type_description filter
     filtered = df[mask_date].copy()
+
+    # Optional: product_type_description filter
     if "product_type_description" in filtered.columns:
         ptypes = ["(All)"] + sorted(map(str, filtered["product_type_description"].dropna().unique()))
         sel_ptype = st.selectbox("product_type_description", ptypes, index=0)
@@ -207,7 +294,6 @@ with st.sidebar:
 st.caption(f"{len(filtered):,} rows after filters")
 
 metrics_available = {k: v for k, v in METRIC_MAP.items() if v in df.columns}
-
 if not metrics_available:
     st.error(f"No metric columns found. Expected one of {list(METRIC_MAP.values())}, but got {df.columns.tolist()}")
     st.stop()
@@ -216,6 +302,7 @@ left, right = st.columns([2, 1])
 
 with left:
     st.subheader("Ranking")
+    dims_available = [d for d in DIMENSIONS if d in filtered.columns]  # refresh after filtering
     group_by = st.multiselect(
         "Group by (choose one or a combination)",
         dims_available,
@@ -231,8 +318,6 @@ if not group_by:
     st.info("Pick at least one column to rank by.")
     st.stop()
 
-metric_col = metrics_available[metric_label]
-
 # Decide how to aggregate:
 if metric_col == "margin":
     aggfunc = "mean"   # average margin
@@ -242,15 +327,13 @@ else:
 calc = (
     filtered
     .groupby(group_by, dropna=False)[metric_col]
-    .agg(aggfunc)   # <--- sum or mean depending on metric
+    .agg(aggfunc)
     .reset_index()
     .sort_values(metric_col, ascending=False)
     .head(top_n)
 )
 
 # Show results
-
-
 st.subheader("Results")
 st.dataframe(calc.rename(columns={metric_col: metric_label}), use_container_width=True)
 
