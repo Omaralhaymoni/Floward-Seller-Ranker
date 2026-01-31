@@ -150,27 +150,41 @@ ALL_COLUMNS = [
 # ---------- DATA LOADERS ----------
 @st.cache_data(show_spinner=False)
 def load_csv_like(file_or_path) -> pd.DataFrame:
-    """
-    Tries to read a CSV using pandas with automatic delimiter inference.
-    Works with file-like objects and paths.
-    """
     encodings = ["utf-8", "utf-16", "utf-16-le", "utf-16-be", "latin1", "cp1252"]
     for enc in encodings:
         try:
             df = pd.read_csv(file_or_path, sep=None, engine="python", encoding=enc)
-            # Clean null characters from column names
+            # Clean null characters
             df.columns = [c.replace("\x00", "").strip() for c in df.columns]
+
+            # Optional: rename columns to match your ALL_COLUMNS / METRIC_MAP
+            rename_map = {
+                "Order Delivery Date": "date",
+                "Product Type Description": "product_type_description",
+                "Brand Name": "brand_name",
+                "Mc 0": "mc0",
+                "Mc 1": "mc1",
+                "Mc 2": "mc2",
+                "Mc 3": "mc3",
+                "Mc 4": "mc4",
+                "product price LC": "product_price",
+                "Product Cost LC": "product_cost",
+                "gross margin %": "margin",
+                "product sales LC": "product_sales",
+            }
+            df.rename(columns=rename_map, inplace=True)
             return df
         except Exception:
             if isinstance(file_or_path, (BytesIO, StringIO)):
                 file_or_path.seek(0)
             continue
-    # Final fallback
+    # fallback
     if isinstance(file_or_path, (BytesIO, StringIO)):
         file_or_path.seek(0)
     df = pd.read_csv(file_or_path, encoding="utf-8")
     df.columns = [c.replace("\x00", "").strip() for c in df.columns]
     return df
+
   
 @st.cache_data(show_spinner=False)
 def load_excel(file_or_bytes) -> pd.DataFrame:
@@ -201,21 +215,6 @@ def normalize_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     for m in METRIC_MAP.values():
         if m in df.columns:
             df[m] = pd.to_numeric(df[m], errors="coerce")
-
-    rename_map = {
-    "Order Delivery Date": "date",
-    "Product Type Description": "product_type_description",
-    "Brand Name": "brand_name",
-    "Mc 0": "mc0",
-    "Mc 1": "mc1",
-    "Mc 2": "mc2",
-    "Mc 3": "mc3",
-    "Mc 4": "mc4",
-    "product price LC": "product_price",
-    "Product Cost LC": "product_cost",
-    "gross margin %": "margin",
-    "product sales LC": "product_sales"}
-    df.rename(columns=rename_map, inplace=True)
 
     return df
 
