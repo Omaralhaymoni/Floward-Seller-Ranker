@@ -186,7 +186,7 @@ def normalize_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     if df is None or df.empty:
         return pd.DataFrame()
 
-    df.columns = [c.strip() for c in df.columns]
+    df.columns = [c.strip().lower() for c in df.columns]
 
     # soft warning for missing columns (not fatal)
     missing = [c for c in ALL_COLUMNS if c not in df.columns]
@@ -201,6 +201,21 @@ def normalize_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     for m in METRIC_MAP.values():
         if m in df.columns:
             df[m] = pd.to_numeric(df[m], errors="coerce")
+
+    rename_map = {
+    "Order Delivery Date": "date",
+    "Product Type Description": "product_type_description",
+    "Brand Name": "brand_name",
+    "Mc 0": "mc0",
+    "Mc 1": "mc1",
+    "Mc 2": "mc2",
+    "Mc 3": "mc3",
+    "Mc 4": "mc4",
+    "product price LC": "product_price",
+    "Product Cost LC": "product_cost",
+    "gross margin %": "margin",
+    "product sales LC": "product_sales"}
+    df.rename(columns=rename_map, inplace=True)
 
     return df
 
