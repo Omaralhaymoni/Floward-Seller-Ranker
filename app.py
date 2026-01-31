@@ -154,19 +154,24 @@ def load_csv_like(file_or_path) -> pd.DataFrame:
     Tries to read a CSV using pandas with automatic delimiter inference.
     Works with file-like objects and paths.
     """
-    encodings = ["utf-8", "latin1", "cp1252"]
+    encodings = ["utf-8", "utf-16", "utf-16-le", "utf-16-be", "latin1", "cp1252"]
     for enc in encodings:
         try:
             df = pd.read_csv(file_or_path, sep=None, engine="python", encoding=enc)
+            # Clean null characters from column names
+            df.columns = [c.replace("\x00", "").strip() for c in df.columns]
             return df
         except Exception:
             if isinstance(file_or_path, (BytesIO, StringIO)):
                 file_or_path.seek(0)
             continue
-    # final fallback, raise original error
+    # Final fallback
     if isinstance(file_or_path, (BytesIO, StringIO)):
         file_or_path.seek(0)
-    return pd.read_csv(file_or_path, encoding="utf-8")
+    df = pd.read_csv(file_or_path, encoding="utf-8")
+    df.columns = [c.replace("\x00", "").strip() for c in df.columns]
+    return df
+  
 @st.cache_data(show_spinner=False)
 def load_excel(file_or_bytes) -> pd.DataFrame:
     """
